@@ -19,7 +19,22 @@ type Config struct {
 	Server   ServerConfig
 	GitHub   GitHubConfig
 	Agent    AgentConfig
+	Feishu   FeishuConfig
 	DataDir  string
+}
+
+// FeishuConfig 是可选的飞书事件通道。Enabled 为 false 时完全不监听。
+// 通道只收发指令，不持有审查 runtime。
+type FeishuConfig struct {
+	Enabled           bool
+	AppID             string
+	AppSecret         string
+	VerificationToken string
+	EncryptKey        string
+	Path              string
+	APIBase           string
+	AllowedChats      []string
+	AllowedUsers      []string
 }
 
 // ServerConfig 是本机 HTTP 监听配置。
@@ -104,6 +119,17 @@ type fileConfig struct {
 		MaxContextTokens   int      `json:"max_context_tokens"`
 		RequestTimeout     string   `json:"request_timeout"`
 	} `json:"agent"`
+	Feishu struct {
+		Enabled           bool     `json:"enabled"`
+		AppID             string   `json:"app_id"`
+		AppSecret         string   `json:"app_secret"`
+		VerificationToken string   `json:"verification_token"`
+		EncryptKey        string   `json:"encrypt_key"`
+		Path              string   `json:"path"`
+		APIBase           string   `json:"api_base"`
+		AllowedChats      []string `json:"allowed_chats"`
+		AllowedUsers      []string `json:"allowed_users"`
+	} `json:"feishu"`
 }
 
 // Load 读取当前目录下的 .MojoReviewer/config.json。
@@ -182,6 +208,17 @@ func normalize(file fileConfig) (Config, error) {
 			FixMaxChangedFiles: file.Agent.FixMaxChangedFiles,
 			FixMaxDiffBytes:    file.Agent.FixMaxDiffBytes,
 		},
+		Feishu: FeishuConfig{
+			Enabled:           file.Feishu.Enabled,
+			AppID:             strings.TrimSpace(file.Feishu.AppID),
+			AppSecret:         strings.TrimSpace(file.Feishu.AppSecret),
+			VerificationToken: strings.TrimSpace(file.Feishu.VerificationToken),
+			EncryptKey:        strings.TrimSpace(file.Feishu.EncryptKey),
+			Path:              feishuPath(file.Feishu.Path),
+			APIBase:           strings.TrimRight(strings.TrimSpace(file.Feishu.APIBase), "/"),
+			AllowedChats:      compact(file.Feishu.AllowedChats),
+			AllowedUsers:      compact(file.Feishu.AllowedUsers),
+		},
 	}
 	if cfg.Server.Port == 0 {
 		cfg.Server.Port = 9968
@@ -192,7 +229,23 @@ func normalize(file fileConfig) (Config, error) {
 	if cfg.GitHub.WebhookSecret == "" {
 		return Config{}, fmt.Errorf("%s 缺少 github.webhook_secret", ConfigPath)
 	}
+	if cfg.Feishu.Enabled {
+		if cfg.Feishu.AppID == "" || cfg.Feishu.AppSecret == "" || cfg.Feishu.VerificationToken == "" {
+			return Config{}, fmt.Errorf("%s 启用飞书时需要 app_id、app_secret、verification_token", ConfigPath)
+		}
+	}
 	return cfg, nil
+}
+
+func feishuPath(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "/feishu/events"
+	}
+	if !strings.HasPrefix(value, "/") {
+		value = "/" + value
+	}
+	return value
 }
 
 // githubHost 只接受主机名。带协议、路径、端口或空白的值都视为无效并忽略，

@@ -13,6 +13,7 @@ import (
 
 	"github.com/mojoreviewer/mojoreviewer/internal/agent"
 	"github.com/mojoreviewer/mojoreviewer/internal/config"
+	"github.com/mojoreviewer/mojoreviewer/internal/feishu"
 	"github.com/mojoreviewer/mojoreviewer/internal/github"
 	"github.com/mojoreviewer/mojoreviewer/internal/review"
 	"github.com/mojoreviewer/mojoreviewer/internal/store"
@@ -56,6 +57,11 @@ func (s *Server) Start(ctx context.Context) error {
 		_, _ = w.Write([]byte("ok"))
 	})
 	mux.HandleFunc("POST /webhook/github", s.handleWebhook)
+	if s.cfg.Feishu.Enabled {
+		channel := s.feishuChannel()
+		mux.Handle("POST "+s.cfg.Feishu.Path, channel.Handler())
+		log.Printf("飞书通道监听 %s（与审查 runtime 分离）", s.cfg.Feishu.Path)
+	}
 	httpServer := &http.Server{Addr: s.cfg.Server.Addr(), Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 
 	go s.worker(ctx)
@@ -131,6 +137,89 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	s.jobs <- *item
 	w.WriteHeader(http.StatusAccepted)
 	_, _ = w.Write([]byte(`{"status":"queued"}`))
+}
+
+// EnqueueExternal 接收飞书等外部通道已经解析好的任务。
+// 缺 PR 元数据时只补 GitHub 信息，然后进入与 webhook 相同的单 worker 队列。
+func (s *Server) EnqueueExternal(ctx context.Context, item github.Review) error {
+	if item.Repo == "" || item.Number < 1 {
+		return fmt.Errorf("缺少仓库或 PR 编号")
+	}
+	if len(s.allowed) > 0 && !s.allowed[item.Repo] {
+		return fmt.Errorf("仓库不在允许名单")
+	}
+	if item.Intent == "" {
+		item.Intent = github.IntentReview
+	}
+	if item.SessionKey == "" {
+		item.SessionKey = fmt.Sprintf("%s#%d", item.Repo, item.Number)
+	}
+	if item.CloneURL == "" || item.HeadSHA == "" {
+		resolved, err := github.ResolveComment(ctx, github.Review{Repo: item.Repo, Number: item.Number}, s.cfg.GitHub.Host)
+		if err != nil {
+			return err
+		}
+		intent, instruction, comment, author, attempt := item.Intent, item.Instruction, item.Comment, item.Author, item.AttemptID
+		item = resolved
+		item.Intent = intent
+		item.Instruction = instruction
+		item.Comment = comment
+		if author != "" {
+			item.Author = author
+		}
+		item.AttemptID = attempt
+	}
+	if item.AttemptID == "" {
+		item.AttemptID = fmt.Sprint(time.Now().UnixNano())
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.jobs) == cap(s.jobs) {
+		return fmt.Errorf("队列已满")
+	}
+	seen, err := s.store.HasActivity(item.AttemptID)
+	if err != nil {
+		return err
+	}
+	if seen {
+		return fmt.Errorf("重复投递")
+	}
+	s.pending[item.SessionKey+":"+item.HeadSHA] = true
+	if err := s.store.Activity(store.Activity{ID: item.AttemptID, Repo: item.Repo, Number: item.Number, HeadSHA: item.HeadSHA, State: "queued"}); err != nil {
+		log.Printf("记录排队状态失败")
+	}
+	s.jobs <- item
+	return nil
+}
+
+func (s *Server) feishuChannel() *feishu.Channel {
+	chats := map[string]bool{}
+	for _, id := range s.cfg.Feishu.AllowedChats {
+		chats[id] = true
+	}
+	users := map[string]bool{}
+	for _, id := range s.cfg.Feishu.AllowedUsers {
+		users[id] = true
+	}
+	return &feishu.Channel{
+		AppID:             s.cfg.Feishu.AppID,
+		VerificationToken: s.cfg.Feishu.VerificationToken,
+		EncryptKey:        s.cfg.Feishu.EncryptKey,
+		AllowedChats:      chats,
+		AllowedUsers:      users,
+		Enqueue:           s.EnqueueExternal,
+		Status: func() string {
+			s.mu.Lock()
+			n := len(s.jobs)
+			s.mu.Unlock()
+			return fmt.Sprintf("飞书通道在线。审查队列 %d/%d。结果仍发到 PR 评论。", n, cap(s.jobs))
+		},
+		API: &feishu.API{
+			AppID:     s.cfg.Feishu.AppID,
+			AppSecret: s.cfg.Feishu.AppSecret,
+			BaseURL:   s.cfg.Feishu.APIBase,
+		},
+	}
 }
 
 func (s *Server) worker(ctx context.Context) {
