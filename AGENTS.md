@@ -110,6 +110,8 @@ config.example.json          可提交的配置样例（无真实密钥）
 
 监听默认 `127.0.0.1:9968`。本机入口是 `go run ./cmd/mojoreviewer`。
 
+可选飞书通道在 `internal/feishu`。它只做事件验签、命令解析和回复，通过 `Server.EnqueueExternal` 把任务交给现有单 worker。不要在飞书包里调用 `agent.Runner`、改工具白名单，或让飞书消息直接驱动模型。`feishu.enabled` 默认关闭；未配置时行为与原来一致。
+
 ## 验证
 
 ```bash

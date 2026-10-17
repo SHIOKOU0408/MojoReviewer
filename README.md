@@ -109,6 +109,12 @@ go vet ./...
 | `agent.fix_max_diff_bytes` | 单次改动体量上限，默认 200000 |
 | `data_dir` | 默认 `~/.mojoreviewer` |
 | `agent.home_dir` | LuckyAgent 家目录，默认 `$data_dir/luckyagent` |
+| `feishu.enabled` | 默认 `false`。开启后在同一 HTTP 服务挂飞书事件回调，不另起审查 runtime |
+| `feishu.app_id` / `app_secret` / `verification_token` | 启用时必填。`encrypt_key` 可选，填写后只接受加密回调 |
+| `feishu.path` | 默认 `/feishu/events`。不要和 `/webhook/github` 共用 |
+| `feishu.allowed_chats` / `allowed_users` | 非空时只接受名单内会话或用户；空表示不限制 |
+
+飞书只解析「审查/重审/修复/记住 owner/repo#123」和 PR 链接，然后调用与 webhook 相同的入队。帮助和状态在飞书里直接回复，不进模型。审查结果仍发到 PR 评论，不回灌飞书长回复。
 
 完整边界与流程见 [`AGENTS.md`](AGENTS.md)。
 

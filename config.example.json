@@ -24,5 +24,16 @@
     "fix_allowed_authors": [],
     "fix_max_changed_files": 40,
     "fix_max_diff_bytes": 200000
+  },
+  "feishu": {
+    "enabled": false,
+    "app_id": "",
+    "app_secret": "",
+    "verification_token": "",
+    "encrypt_key": "",
+    "path": "/feishu/events",
+    "api_base": "",
+    "allowed_chats": [],
+    "allowed_users": []
   }
 }
